@@ -1,0 +1,52 @@
+services:
+  caddy:
+    image: newrahmat/caddy:2.9-coraza-crowdsec
+    build:
+      context: ./caddy
+      dockerfile: Dockerfile
+    container_name: caddy-waf
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      - CROWDSEC_API_KEY=${CROWDSEC_API_KEY}
+    networks:
+      - dmz-network
+    volumes:
+      - ./data:/data
+      - ./config:/config
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./ruleset:/ruleset
+      - ./audit:/audit
+      - ./logs:/var/log/caddy
+    depends_on:
+      crowdsec:
+        condition: service_started
+
+  crowdsec:
+    image: crowdsecurity/crowdsec:latest
+    container_name: crowdsec
+    restart: unless-stopped
+    environment:
+      - GID=1000
+      - COLLECTIONS=crowdsecurity/caddy crowdsecurity/http-cve crowdsecurity/whitelist-good-actors crowdsecurity/appsec-virtual-patching crowdsecurity/appsec-generic-rules
+      - BOUNCER_KEY_CADDY=${CROWDSEC_API_KEY}
+    networks:
+      - dmz-network
+    volumes:
+      - ./crowdsec/acquis.yaml:/etc/crowdsec/acquis.yaml
+      - ./crowdsec/data:/var/lib/crowdsec/data
+      - ./logs:/var/log/caddy:ro
+
+  whoami:
+    image: traefik/whoami
+    container_name: whoami
+    restart: unless-stopped
+    networks:
+      - dmz-network
+
+networks:
+  dmz-network:
+    name: dmz-network
+    driver: bridge

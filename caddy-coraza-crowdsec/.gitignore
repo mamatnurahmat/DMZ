@@ -1,0 +1,17 @@
+# Caddy runtime data (certificates, persistent storage)
+data/
+
+# Caddy auto-generated config
+config/
+
+# WAF audit logs
+audit/
+
+# Caddy access logs (shared with CrowdSec)
+logs/
+
+# CrowdSec database
+crowdsec/data/
+
+# Environment secrets
+.env

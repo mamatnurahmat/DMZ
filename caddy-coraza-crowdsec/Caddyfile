@@ -1,0 +1,38 @@
+{
+    order crowdsec first
+    order coraza_waf after crowdsec
+
+    crowdsec {
+        api_url http://crowdsec:8080
+        api_key {env.CROWDSEC_API_KEY}
+        ticker_interval 15s
+        appsec_url http://crowdsec:7422
+    }
+
+    log {
+        output file /var/log/caddy/access.log {
+            roll_size 30MiB
+            roll_keep 5
+        }
+    }
+}
+
+whoami.local {
+    log
+    route {
+        crowdsec
+        coraza_waf {
+            load_owasp_crs
+            directives `
+                Include /ruleset/coraza.conf
+                Include /ruleset/owasp-crs/crs-setup.conf
+                Include /ruleset/owasp-crs/rules/*.conf
+                SecRuleEngine On
+                SecAuditLog /audit/waf-audit.log
+                SecAuditEngine RelevantOnly
+                SecAuditLogRelevantStatus "^(?:(5|4)(0|1)[0-9])$"
+            `
+        }
+        reverse_proxy whoami:80
+    }
+}

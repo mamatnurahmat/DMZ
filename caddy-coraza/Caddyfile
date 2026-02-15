@@ -1,0 +1,20 @@
+{
+    order coraza_waf first
+    debug
+}
+
+whoami.local {
+    coraza_waf {
+        load_owasp_crs
+        directives `
+            Include /ruleset/coraza.conf
+            Include /ruleset/owasp-crs/crs-setup.conf
+            Include /ruleset/owasp-crs/rules/*.conf
+            SecRuleEngine On
+            SecAuditLog /audit/waf-audit.log
+            SecAuditEngine RelevantOnly
+            SecAuditLogRelevantStatus "^(?:(5|4)(0|1)[0-9])$"
+        `
+    }
+    reverse_proxy whoami:80
+}

@@ -1,0 +1,31 @@
+services:
+  caddy:
+    image: newrahmat/caddy:2.9-coraza
+    build:
+      context: ./caddy
+      dockerfile: Dockerfile
+    container_name: caddy-waf
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    networks:
+      - caddy-network
+    volumes:
+      - ./data:/data
+      - ./config:/config
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./ruleset:/ruleset
+      - ./audit:/audit
+
+  whoami:
+    image: traefik/whoami
+    container_name: whoami
+    restart: unless-stopped
+    networks:
+      - caddy-network
+
+networks:
+  caddy-network:
+    name: caddy-network
+    driver: bridge
