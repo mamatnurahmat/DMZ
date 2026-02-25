@@ -1,0 +1,97 @@
+---
+# ──────────────────────────────────────────────────
+# Generate Self-Signed SSL Certificate
+# ──────────────────────────────────────────────────
+# Playbook ini membuat self-signed SSL certificate untuk domain yang
+# ditentukan dan menyimpannya di node DMZ. Certificate dalam format
+# PEM gabungan (key + cert) yang siap digunakan oleh HAProxy.
+#
+# File yang dihasilkan di node DMZ:
+#   /home/ubuntu/haproxy/certs/echo.local.pem  (key + cert gabungan)
+#   /home/ubuntu/haproxy/certs/echo.local.key  (private key)
+#   /home/ubuntu/haproxy/certs/echo.local.crt  (certificate)
+#
+# Inventory: inventory.ini (group: dmz)
+# Prasyarat: -
+#
+# Cara apply:
+#   ansible-playbook -i inventory.ini DMZ_generate-ssl.yml
+#
+# Setelah generate SSL, jalankan deploy playbook u/ apply:
+#   ansible-playbook -i inventory.ini DMZ_deploy-haproxy-simple.yml
+# ──────────────────────────────────────────────────
+
+- name: Generate Self-Signed SSL Certificates
+  hosts: dmz
+  become: true
+  vars:
+    cert_dir: /home/ubuntu/haproxy/certs
+    domains:
+      - name: echo.local
+        days: 365
+  tasks:
+    - name: Install openssl
+      apt:
+        name: openssl
+        state: present
+        update_cache: yes
+
+    - name: Create certs directory
+      file:
+        path: "{{ cert_dir }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Generate private key for {{ item.name }}
+      openssl_privatekey:
+        path: "{{ cert_dir }}/{{ item.name }}.key"
+        size: 2048
+      loop: "{{ domains }}"
+
+    - name: Generate CSR for {{ item.name }}
+      openssl_csr:
+        path: "{{ cert_dir }}/{{ item.name }}.csr"
+        privatekey_path: "{{ cert_dir }}/{{ item.name }}.key"
+        common_name: "{{ item.name }}"
+        subject_alt_name:
+          - "DNS:{{ item.name }}"
+          - "DNS:*.{{ item.name }}"
+      loop: "{{ domains }}"
+
+    - name: Generate self-signed certificate for {{ item.name }}
+      openssl_certificate:
+        path: "{{ cert_dir }}/{{ item.name }}.crt"
+        privatekey_path: "{{ cert_dir }}/{{ item.name }}.key"
+        csr_path: "{{ cert_dir }}/{{ item.name }}.csr"
+        provider: selfsigned
+        selfsigned_not_after: "+{{ item.days }}d"
+      loop: "{{ domains }}"
+
+    - name: Create combined PEM file for HAProxy (key + cert)
+      shell: |
+        cat {{ cert_dir }}/{{ item.name }}.key {{ cert_dir }}/{{ item.name }}.crt > {{ cert_dir }}/{{ item.name }}.pem
+      loop: "{{ domains }}"
+
+    - name: Set permissions on PEM file
+      file:
+        path: "{{ cert_dir }}/{{ item.name }}.pem"
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+      loop: "{{ domains }}"
+
+    - name: Show generated certificates
+      debug:
+        msg:
+          - "SSL certificates generated successfully!"
+          - "──────────────────────────────────────"
+          - "Directory : {{ cert_dir }}"
+          - "Domain    : {{ item.name }}"
+          - "Files     :"
+          - "  Key     : {{ cert_dir }}/{{ item.name }}.key"
+          - "  Cert    : {{ cert_dir }}/{{ item.name }}.crt"
+          - "  PEM     : {{ cert_dir }}/{{ item.name }}.pem (untuk HAProxy)"
+          - "Valid     : {{ item.days }} hari"
+      loop: "{{ domains }}"

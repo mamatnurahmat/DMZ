@@ -1,0 +1,58 @@
+---
+# ──────────────────────────────────────────────────
+# Deploy Echo Server menggunakan Docker Compose
+# ──────────────────────────────────────────────────
+# Playbook ini mendeploy echo-server (v0.9.2) pada node APP (10.0.0.11)
+# menggunakan Docker Compose. Echo server akan running di port 3000.
+#
+# Inventory: inventory.ini (group: incus_vms -> app)
+# Prasyarat: Docker sudah terinstall di node APP (install-docker.yml)
+#
+# Cara apply:
+#   ansible-playbook -i inventory.ini APP_deploy-echo-server.yml
+# ──────────────────────────────────────────────────
+
+- name: Deploy Echo Server on APP VM
+  hosts: app
+  become: true
+  tasks:
+    - name: Ensure echo-server directory exists
+      file:
+        path: /home/ubuntu/echo-server
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+
+    - name: Copy docker-compose.yml for Echo Server
+      copy:
+        dest: /home/ubuntu/echo-server/docker-compose.yml
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+        content: |
+          version: "3"
+          services:
+            echo-server:
+              image: ealen/echo-server:0.9.2
+              restart: always
+              ports:
+                - "3000:80"
+
+    - name: Stop existing echo-server container (if any)
+      shell: docker compose down
+      args:
+        chdir: /home/ubuntu/echo-server
+      ignore_errors: yes
+
+    - name: Start Echo Server with docker compose
+      shell: docker compose up -d
+      args:
+        chdir: /home/ubuntu/echo-server
+
+    - name: Show access info
+      debug:
+        msg:
+          - "Echo Server deployed on APP VM (10.0.0.11)"
+          - "Port: 3000"
+          - "Test: curl http://10.0.0.11:3000"

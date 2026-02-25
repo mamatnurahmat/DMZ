@@ -1,0 +1,263 @@
+---
+# ──────────────────────────────────────────────────
+# Deploy Minimal HAProxy Load Balancer pada DMZ
+# ──────────────────────────────────────────────────
+# Playbook ini mendeploy HAProxy sebagai load balancer di node DMZ (10.0.0.10)
+# menggunakan Docker Compose. HAProxy akan mem-proxy traffic ke:
+#   - HTTP (80)   → Redirect ke HTTPS
+#   - HTTPS (443) → Echo-Server di APP node (10.0.0.11:3000)
+#   - Stats (8404)→ Dashboard Statistik
+# Dilengkapi dengan ModSecurity SPOA Agent
+#
+# Inventory: inventory.ini (group: dmz)
+# Prasyarat:
+#   - Docker sudah terinstall di node DMZ (install-docker.yml)
+# Prasyarat:
+#   - Docker sudah terinstall di node DMZ (install-docker.yml)
+#   - SSL certificate sudah digenerate (DMZ_generate-ssl.yml)
+#
+# Cara apply:
+#   ansible-playbook -i inventory.ini DMZ_deploy-haproxy-simple.yml
+# ──────────────────────────────────────────────────
+
+- name: Deploy HAProxy on DMZ
+  hosts: dmz
+  become: true
+  tasks:
+    - name: Create haproxy and modsecurity directories
+      file:
+        path: "{{ item }}"
+        state: directory
+        owner: ubuntu
+        group: ubuntu
+        mode: '0755'
+      loop:
+        - /home/ubuntu/haproxy
+        - /home/ubuntu/haproxy/modsecurity
+
+    - name: Check if modsecurity configuration exists
+      stat:
+        path: /home/ubuntu/haproxy/modsecurity/modsecurity.conf
+      register: modsec_conf
+
+    - name: Copy default ModSecurity configuration from image
+      shell: |
+        docker create --name modsec_tmp quay.io/jcmoraisjr/modsecurity-spoa
+        docker cp modsec_tmp:/etc/modsecurity/. /home/ubuntu/haproxy/modsecurity/
+        docker rm -f modsec_tmp
+      when: not modsec_conf.stat.exists
+      
+    - name: Set permissions for modsecurity directory
+      file:
+        path: /home/ubuntu/haproxy/modsecurity
+        owner: ubuntu
+        group: ubuntu
+        recurse: yes
+        mode: '0644'
+      when: not modsec_conf.stat.exists
+
+
+    - name: Install Rsyslog and Fail2ban
+      apt:
+        name:
+          - rsyslog
+          - fail2ban
+        state: present
+        update_cache: yes
+
+    - name: Configure Rsyslog for HAProxy
+      copy:
+        dest: /etc/rsyslog.d/49-haproxy.conf
+        content: |
+          local0.* -/var/log/haproxy.log
+          & stop
+      notify: Restart rsyslog
+
+    - name: Create Fail2ban filter for HAProxy ModSecurity
+      copy:
+        dest: /etc/fail2ban/filter.d/haproxy-modsec.conf
+        content: |
+          [Definition]
+          failregex = haproxy\[[0-9]+\]: <HOST>:[0-9]+ \[.*\] .* 403
+          ignoreregex =
+      notify: Restart fail2ban
+
+    - name: Create Fail2ban jail for HAProxy ModSecurity
+      copy:
+        dest: /etc/fail2ban/jail.d/haproxy-modsec.conf
+        content: |
+          [haproxy-modsec]
+          enabled = true
+          filter = haproxy-modsec
+          logpath = /var/log/haproxy.log
+          action = iptables-allports[chain="DOCKER-USER"]
+          port = anyport
+          maxretry = 3
+          findtime = 60
+          bantime = 3600
+      notify: Restart fail2ban
+
+    - name: Copy spoe-modsecurity.conf
+      copy:
+        dest: /home/ubuntu/haproxy/spoe-modsecurity.conf
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+        content: |
+          [modsecurity]
+          spoe-agent modsecurity-agent
+              messages     check-request
+              option       var-prefix  modsec
+              timeout      hello       100ms
+              timeout      idle        30s
+              timeout      processing  1s
+              use-backend  spoe-modsecurity
+          spoe-message check-request
+              args   unique-id method path query req.ver req.hdrs_bin req.body_size req.body
+              event  on-frontend-http-request
+
+    - name: Copy HAProxy configuration
+      copy:
+        dest: /home/ubuntu/haproxy/haproxy.cfg
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+        content: |
+          global
+              log /dev/log local0
+              maxconn 4096
+
+          defaults
+              log     global
+              mode    tcp
+              option  tcplog
+              option  dontlognull
+              retries 3
+              timeout connect 5s
+              timeout client  50s
+              timeout server  50s
+
+          # ──────────────────────────────────────
+          # Stats Dashboard (8404)
+          # ──────────────────────────────────────
+          frontend stats
+              mode http
+              bind *:8404
+              stats enable
+              stats uri /stats
+              stats refresh 10s
+              stats admin if LOCALHOST
+
+          # ──────────────────────────────────────
+          # HTTP (80) - Redirect ke HTTPS
+          # ──────────────────────────────────────
+          frontend http_in
+              mode http
+              bind *:80
+              option httplog
+              
+              # Redirect semua HTTP ke HTTPS
+              http-request redirect scheme https code 301 if !{ ssl_fc }
+
+          # ──────────────────────────────────────
+          # HTTPS (443) - SSL Termination
+          # ──────────────────────────────────────
+          frontend https_in
+              mode http
+              bind *:443 ssl crt /usr/local/etc/haproxy/certs/echo.local.pem
+              option httplog
+
+              # ModSecurity SPOA Integration
+              filter spoe engine modsecurity config /usr/local/etc/haproxy/spoe-modsecurity.conf
+              http-request deny if { var(txn.modsec.code) -m int gt 0 }
+
+              acl host_echo hdr(host) -i echo.local
+
+              use_backend echo_server_backend if host_echo
+              default_backend echo_server_backend
+
+          # ──────────────────────────────────────
+          # Echo-Server Backend (10.0.0.11:3000)
+          # ──────────────────────────────────────
+          backend echo_server_backend
+              mode http
+              balance roundrobin
+              option httpchk GET /
+              server app 10.0.0.11:3000 check
+
+          # ──────────────────────────────────────
+          # ModSecurity SPOA Backend
+          # ──────────────────────────────────────
+          backend spoe-modsecurity
+              mode tcp
+              server modsec-spoa1 modsecurity:12345 check
+
+    - name: Copy docker-compose.yml for HAProxy and ModSecurity
+      copy:
+        dest: /home/ubuntu/haproxy/docker-compose.yml
+        owner: ubuntu
+        group: ubuntu
+        mode: '0644'
+        content: |
+          version: '2'
+
+          services:
+            haproxy:
+              image: haproxy:lts
+              container_name: haproxy
+              restart: always
+              ports:
+                - "80:80"
+                - "443:443"
+                - "8404:8404"
+              volumes:
+                - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+                - ./certs:/usr/local/etc/haproxy/certs:ro
+                - ./spoe-modsecurity.conf:/usr/local/etc/haproxy/spoe-modsecurity.conf:ro
+                - /dev/log:/dev/log:rw
+
+            modsecurity:
+              image: quay.io/jcmoraisjr/modsecurity-spoa
+              container_name: modsecurity
+              restart: always
+              ports:
+                - "12345:12345"
+              volumes:
+                - ./modsecurity:/etc/modsecurity
+
+    - name: Stop existing HAProxy container
+      shell: docker compose down
+      args:
+        chdir: /home/ubuntu/haproxy
+      ignore_errors: yes
+
+    - name: Start HAProxy and ModSecurity with docker compose
+      shell: docker compose up -d --force-recreate
+      args:
+        chdir: /home/ubuntu/haproxy
+
+    - name: Show HAProxy access info
+      debug:
+        msg:
+          - "HAProxy, ModSecurity & Fail2ban deployed on DMZ (10.0.0.10)"
+          - "───────────────────────────────────────"
+          - "Stats Dashboard : http://10.0.0.10:8404/stats"
+          - "HTTP            : http://10.0.0.10:80"
+          - "HTTPS           : https://10.0.0.10:443"
+          - "Echo-Server     : https://echo.local (SSL termination di DMZ -> APP 10.0.0.11:3000)"
+          - "───────────────────────────────────────"
+          - "Untuk akses echo.local, pastikan ada entri di /etc/hosts:"
+          - "  10.0.0.10 echo.local"
+          - ""
+          - "Test: curl -k https://echo.local"
+
+  handlers:
+    - name: Restart rsyslog
+      service:
+        name: rsyslog
+        state: restarted
+
+    - name: Restart fail2ban
+      service:
+        name: fail2ban
+        state: restarted
