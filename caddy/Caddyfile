@@ -1,1 +1,45 @@
+{
+    admin off
+}
 
+prestige2.sawangan.web.id {
+    reverse_proxy pocketbase:8090
+}
+
+api.sawangan.web.id {
+    reverse_proxy pocketbase-api:8888
+}
+
+dashboard.sawangan.web.id {
+    reverse_proxy vikunja:3456
+}
+
+argocd.sawangan.web.id {
+    handle {
+        @grpc {
+            header Content-Type application/grpc
+        }
+        reverse_proxy @grpc 100.106.55.29:8443 {
+            transport http {
+                versions h2c 2
+            }
+        }
+        reverse_proxy 100.106.55.29:8080
+    }
+}
+
+vault.sawangan.web.id {
+    reverse_proxy 100.106.55.29:8200
+}
+
+vault-web.sawangan.web.id {
+    reverse_proxy 100.106.55.29:8200
+}
+
+photos.sawangan.web.id {
+    reverse_proxy 100.106.55.29:8283
+}
+
+keycloak.sawangan.web.id {
+    reverse_proxy 100.106.55.29:8888
+}
