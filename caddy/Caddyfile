@@ -74,7 +74,7 @@ photos.sawangan.web.id {
     reverse_proxy 100.106.55.29:8283
 }
 
-keycloak.sawangan.web.id {
+keyclock.sawangan.web.id {
     reverse_proxy 100.106.55.29:8888
 }
 
