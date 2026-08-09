@@ -1,65 +1,31 @@
 {
-    order coraza_waf first
-    #debug
-}
-
-# WAF untuk domain publik
-api.sawangan.web.id {
-    coraza_waf {
-        load_owasp_crs
-        directives `
-            Include /ruleset/coraza.conf
-            Include /ruleset/owasp-crs/crs-setup.conf.example
-            Include /ruleset/owasp-crs/rules/*.conf
-
-            SecRuleEngine On
-            SecAuditLog /audit/waf-audit.log
-            SecAuditEngine RelevantOnly
-            SecAuditLogRelevantStatus "^(?:(5|4)(0|1)[0-9])$"
-            SecRequestBodyAccess On
-            SecResponseBodyAccess On
-            SecResponseBodyMimeType text/plain text/html text/xml application/json
-        `
-    }
-    reverse_proxy pocketbase-api:8888
+    admin off
 }
 
 prestige2.sawangan.web.id {
-    coraza_waf {
-        load_owasp_crs
-        directives `
-            Include /ruleset/coraza.conf
-            Include /ruleset/owasp-crs/crs-setup.conf.example
-            Include /ruleset/owasp-crs/rules/*.conf
-
-            SecRuleEngine On
-            SecAuditLog /audit/waf-audit.log
-            SecAuditEngine RelevantOnly
-            SecAuditLogRelevantStatus "^(?:(5|4)(0|1)[0-9])$"
-            SecRequestBodyAccess On
-        `
-    }
     reverse_proxy pocketbase:8090
 }
 
-# WAF untuk domain Tailscale
-argocd.sawangan.web.id {
-    coraza_waf {
-        load_owasp_crs
-        directives `
-            Include /ruleset/coraza.conf
-            Include /ruleset/owasp-crs/crs-setup.conf.example
-            Include /ruleset/owasp-crs/rules/*.conf
-            SecRuleEngine On
-            SecAuditLog /audit/waf-audit.log
-        `
-    }
-    reverse_proxy 100.106.55.29:8080
+api.sawangan.web.id {
+    reverse_proxy pocketbase-api:8888
 }
 
-# Non-WAF domains (internal/trusted)
 dashboard.sawangan.web.id {
     reverse_proxy vikunja:3456
+}
+
+argocd.sawangan.web.id {
+    handle {
+        @grpc {
+            header Content-Type application/grpc
+        }
+        reverse_proxy @grpc 100.106.55.29:8443 {
+            transport http {
+                versions h2c 2
+            }
+        }
+        reverse_proxy 100.106.55.29:8080
+    }
 }
 
 vault.sawangan.web.id {
@@ -80,4 +46,22 @@ keyclock.sawangan.web.id {
 
 k8s.sawangan.web.id {
     reverse_proxy 100.106.55.29:8086
+}
+
+
+llm.ngen.web.id {
+    handle /swagger/* {
+        uri strip_prefix /swagger
+        root * /home/devops/llm-swagger
+        header Cache-Control "public, max-age=86400"
+        header Access-Control-Allow-Origin "*"
+        file_server
+    }
+    handle /openapi.json {
+        root * /home/devops/llm-swagger
+        header Cache-Control "public, max-age=86400"
+        header Access-Control-Allow-Origin "*"
+        file_server
+    }
+    reverse_proxy 100.106.55.29:8110
 }

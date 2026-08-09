@@ -10,6 +10,7 @@ services:
       - ./Caddyfile:/etc/caddy/Caddyfile
       - /var/data/pocketbase/caddy_data:/data
       - /var/data/pocketbase/caddy_config:/config
+      - /home/devops/llm-swagger:/home/devops/llm-swagger:ro
     networks:
       - pocketbase-net
 
